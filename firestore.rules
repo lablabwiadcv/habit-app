@@ -1,0 +1,19 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /users/{userId}/daymark/{documentId} {
+      function isOwner() {
+        return request.auth != null && request.auth.uid == userId;
+      }
+
+      allow read: if isOwner() && documentId == "state";
+      allow create, update: if isOwner()
+        && documentId == "state"
+        && request.resource.data.keys().hasOnly(["state", "updatedAt"])
+        && request.resource.data.state is map
+        && request.resource.data.updatedAt == request.time;
+      allow delete: if isOwner() && documentId == "state";
+    }
+  }
+}

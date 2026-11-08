@@ -1,0 +1,18 @@
+{
+  "name": "Daymark — your daily rhythm",
+  "short_name": "Daymark",
+  "description": "A calm, offline-friendly space for habits, study, learning, and wellbeing.",
+  "start_url": "/#today",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#f8f7f4",
+  "theme_color": "#27232c",
+  "icons": [
+    {
+      "src": "/favicon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}
