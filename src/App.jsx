@@ -39,6 +39,10 @@ import Icon from "./components/Icon.jsx";
 import StudySets from "./components/StudySets.jsx";
 import AccountSyncDialog from "./components/AccountSyncDialog.jsx";
 import { isFirebaseConfigured } from "./firebaseConfig.js";
+import { extractOfficeText } from "./studyDocumentImport.js";
+
+const STUDY_FILE_ACCEPT =
+  ".pdf,.doc,.docx,.rtf,.odt,.pptx,.xlsx,.html,.htm,.txt,.md,.markdown,.csv,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/rtf,text/rtf,application/vnd.oasis.opendocument.text,application/vnd.openxmlformats-officedocument.presentationml.presentation,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,text/html,text/plain,text/markdown,text/csv";
 
 const COLORS = [
   "#7c5cff",
@@ -787,40 +791,55 @@ function generateStudyCardsOnDevice(text, count, onProgress) {
   });
 }
 
+function ensurePromiseWithResolvers() {
+  if (typeof Promise.withResolvers === "function") return;
+
+  Object.defineProperty(Promise, "withResolvers", {
+    configurable: true,
+    writable: true,
+    value() {
+      let resolve;
+      let reject;
+      const promise = new Promise((resolvePromise, rejectPromise) => {
+        resolve = resolvePromise;
+        reject = rejectPromise;
+      });
+      return { promise, resolve, reject };
+    },
+  });
+}
+
 async function extractStudyText(file) {
   if (file.size > 10 * 1024 * 1024) {
     throw new Error("Please choose a file smaller than 10 MB.");
   }
   const extension = file.name.split(".").pop()?.toLowerCase();
   if (extension === "pdf") {
+    ensurePromiseWithResolvers();
+    const pdfjs = await import("pdfjs-dist/legacy/build/pdf.mjs");
+    if (!pdfjs.GlobalWorkerOptions || typeof pdfWorkerUrl !== "string") {
+      throw new Error("PDF worker is unavailable");
+    }
+    pdfjs.GlobalWorkerOptions.workerSrc = pdfWorkerUrl;
+    const loadingTask = pdfjs.getDocument({
+      data: await file.arrayBuffer(),
+    });
     try {
-      const pdfjs = await import("pdfjs-dist/legacy/build/pdf.mjs");
-      if (!pdfjs.GlobalWorkerOptions || typeof pdfWorkerUrl !== "string") {
-        throw new Error("PDF worker is unavailable");
-      }
-      pdfjs.GlobalWorkerOptions.workerSrc = pdfWorkerUrl;
-      const loadingTask = pdfjs.getDocument({
-        data: await file.arrayBuffer(),
-      });
-      try {
-        const pdf = await loadingTask.promise;
-        const pageCount = Math.min(pdf.numPages, 40);
-        const pages = await Promise.all(
-          Array.from({ length: pageCount }, async (_, index) => {
-            const page = await pdf.getPage(index + 1);
-            const content = await page.getTextContent();
-            return content.items
-              .filter((item) => "str" in item)
-              .map((item) => item.str)
-              .join(" ");
-          }),
-        );
-        return pages.join("\n");
-      } finally {
-        await loadingTask.destroy();
-      }
-    } catch {
-      throw new Error("PDF import is not supported in this browser");
+      const pdf = await loadingTask.promise;
+      const pageCount = Math.min(pdf.numPages, 40);
+      const pages = await Promise.all(
+        Array.from({ length: pageCount }, async (_, index) => {
+          const page = await pdf.getPage(index + 1);
+          const content = await page.getTextContent();
+          return content.items
+            .filter((item) => "str" in item)
+            .map((item) => item.str)
+            .join(" ");
+        }),
+      );
+      return pages.join("\n");
+    } finally {
+      await loadingTask.destroy();
     }
   }
   if (extension === "docx") {
@@ -830,11 +849,14 @@ async function extractStudyText(file) {
     });
     return result.value;
   }
+  if (["doc", "rtf", "odt", "pptx", "xlsx", "html", "htm"].includes(extension || "")) {
+    return extractOfficeText(file, extension);
+  }
   if (["txt", "md", "markdown", "csv"].includes(extension || "")) {
     return file.text();
   }
   throw new Error(
-    "Choose a PDF, Word document (.docx), TXT, Markdown, or CSV file.",
+    "Choose a PDF, Word document (.doc or .docx), RTF, OpenDocument (.odt), PowerPoint (.pptx), Excel (.xlsx), HTML, TXT, Markdown, or CSV file.",
   );
 }
 
@@ -2684,7 +2706,7 @@ function AiFlashcardLibrary({ study, onUpdate, onNavigate }) {
                 Replace source
                 <input
                   type="file"
-                  accept=".pdf,.docx,.txt,.md,.markdown,.csv,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,text/plain,text/markdown,text/csv"
+                  accept={STUDY_FILE_ACCEPT}
                   aria-label={`Choose replacement for ${source.name}`}
                   disabled={replacementBusy || Boolean(pendingReplacement)}
                   onChange={(event) => {
@@ -4949,10 +4971,11 @@ function StudyCard({
                         >
                           <input
                             type="file"
-                            accept=".pdf,.docx,.txt,.md,.markdown,.csv,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,text/plain,text/markdown,text/csv"
+                            accept={STUDY_FILE_ACCEPT}
                             onChange={importStudyFile}
                             disabled={fileBusy}
-                            aria-label="Select a document to generate flashcards"
+                            aria-label="Select a supported document to generate flashcards"
+                            title="PDF, Word (.doc/.docx), RTF, ODT, PPTX, XLSX, HTML, TXT, Markdown, or CSV (max 10 MB)"
                           />
                           <Icon
                             name={fileBusy ? "CircleDashed" : "Plus"}
@@ -5126,10 +5149,11 @@ function StudyCard({
                       >
                         <input
                           type="file"
-                          accept=".pdf,.docx,.txt,.md,.markdown,.csv,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,text/plain,text/markdown,text/csv"
+                          accept={STUDY_FILE_ACCEPT}
                           onChange={importStudyQuizFile}
                           disabled={fileBusy}
-                          aria-label="Select a document to create quiz questions with AI"
+                          aria-label="Select a supported document to create quiz questions with AI"
+                          title="PDF, Word (.doc/.docx), RTF, ODT, PPTX, XLSX, HTML, TXT, Markdown, or CSV (max 10 MB)"
                         />
                         <Icon
                           name={fileBusy ? "CircleDashed" : "Plus"}
