@@ -14,15 +14,17 @@ import {
   dateKey,
   deduplicateFlashcards,
   estimateOneRepMax,
+  findDuplicateClassDays,
   fillPausedScheduleDays,
+  getClassTimetableRange,
   getHabitScheduleDays,
   getMissedHabitDates,
   isHabitPausedOnDate,
   isValidBackup,
   isWithinQuietHours,
+  layoutClassTimetable,
   normalizeQuizAnswer,
   parseFlashcardCsvWithReport,
-  parseScheduleTextWithReport,
   resumeExpiredHabitPause,
   scheduleSpacedReview,
   normalizeStudySets,
@@ -37,13 +39,6 @@ import Icon from "./components/Icon.jsx";
 import StudySets from "./components/StudySets.jsx";
 import AccountSyncDialog from "./components/AccountSyncDialog.jsx";
 import { isFirebaseConfigured } from "./firebaseConfig.js";
-import {
-  fetchClassroomAssignments,
-  mergeClassroomAssignments,
-  prepareGoogleIdentityServices,
-  requestClassroomAccessToken,
-} from "./classroom.js";
-import { googleClassroomClientId } from "./classroomConfig.js";
 
 const COLORS = [
   "#7c5cff",
@@ -53,6 +48,7 @@ const COLORS = [
   "#5a9cff",
   "#ef6b9a",
 ];
+
 const THEME_PRESETS = [
   ["#9a5de8", "Violet"],
   ["#287d9b", "Ocean"],
@@ -682,7 +678,23 @@ const shuffled = (items) => {
 let studyAiWorker;
 let studyAiRequestId = 0;
 const studyAiRequests = new Map();
-const STUDY_AI_TIMEOUT_MS = 90_000;
+const STUDY_AI_TIMEOUT_MS = 5 * 60_000;
+
+function resetStudyAiRequestTimeout(request) {
+  window.clearTimeout(request.timeoutId);
+  request.timeoutId = window.setTimeout(() => {
+    const error = new Error(
+      "On-device AI took too long. Check your connection and try again.",
+    );
+    studyAiWorker?.terminate();
+    studyAiWorker = null;
+    for (const pendingRequest of studyAiRequests.values()) {
+      window.clearTimeout(pendingRequest.timeoutId);
+      pendingRequest.reject(error);
+    }
+    studyAiRequests.clear();
+  }, STUDY_AI_TIMEOUT_MS);
+}
 
 function cancelStudyCardGeneration() {
   studyAiWorker?.terminate();
@@ -709,6 +721,7 @@ function generateStudyCardsOnDevice(text, count, onProgress) {
           const request = studyAiRequests.get(data.id);
           if (!request) return;
           if (data.type === "progress" || data.type === "warning") {
+            resetStudyAiRequestTimeout(request);
             request.onProgress(data.message);
           } else {
             window.clearTimeout(request.timeoutId);
@@ -724,7 +737,7 @@ function generateStudyCardsOnDevice(text, count, onProgress) {
           const error = new Error(
             window.isSecureContext
               ? "The on-device AI worker stopped unexpectedly."
-              : "AI cards need localhost or HTTPS. Open the app at localhost or an https address.",
+              : "The AI worker stopped on this HTTP connection. On a phone using a local-network address, try an HTTPS address.",
           );
           for (const request of studyAiRequests.values()) {
             window.clearTimeout(request.timeoutId);
@@ -737,19 +750,9 @@ function generateStudyCardsOnDevice(text, count, onProgress) {
       }
 
       id = ++studyAiRequestId;
-      const timeoutId = window.setTimeout(() => {
-        const error = new Error(
-          "On-device AI took too long. Check your connection and try again.",
-        );
-        studyAiWorker?.terminate();
-        studyAiWorker = null;
-        for (const request of studyAiRequests.values()) {
-          window.clearTimeout(request.timeoutId);
-          request.reject(error);
-        }
-        studyAiRequests.clear();
-      }, STUDY_AI_TIMEOUT_MS);
-      studyAiRequests.set(id, { resolve, reject, onProgress, timeoutId });
+      const request = { resolve, reject, onProgress, timeoutId: 0 };
+      studyAiRequests.set(id, request);
+      resetStudyAiRequestTimeout(request);
       studyAiWorker.postMessage({ id, text, count });
     } catch (error) {
       if (id !== undefined) {
@@ -4890,6 +4893,11 @@ function StudyCard({
                     >
                       <summary>Create cards from notes</summary>
                       <div className="study-file-import">
+                        <p className="flashcard-ai-note">
+                          First use downloads the on-device AI model. Keep this
+                          page open; mobile HTTP links may need to download the
+                          model again next time.
+                        </p>
                         <label className="ai-card-count">
                           Number of cards
                           <input
@@ -12454,6 +12462,14 @@ function GlobalSearchPalette({
             placeholder="Search habits, tasks, notes, cards…"
           />
           <kbd>ESC</kbd>
+          <button
+            type="button"
+            className="command-palette-close"
+            onClick={onClose}
+            aria-label="Close search"
+          >
+            <Icon name="X" size={18} />
+          </button>
         </div>
         <div className="command-palette-results">
           {results.map((entry, index) => (
@@ -13440,7 +13456,6 @@ function ClassSchedulePage({
   onUpdate,
   onRequestReminders,
   toast,
-  onSyncClassroomAssignments,
   editorMode = false,
   onNavigate,
 }) {
@@ -13459,39 +13474,15 @@ function ClassSchedulePage({
     day: "numeric",
   })}`;
   const [className, setClassName] = useState("");
-  const [classDay, setClassDay] = useState(todayName);
+  const [classDays, setClassDays] = useState([todayName]);
   const [mobileTimetableDay, setMobileTimetableDay] = useState(todayName);
-  const [classWeekPattern, setClassWeekPattern] = useState("");
+  useEffect(() => {
+    setMobileTimetableDay(todayName);
+  }, [todayName]);
   const [startTime, setStartTime] = useState("08:00");
   const [endTime, setEndTime] = useState("09:00");
   const [location, setLocation] = useState("");
   const [reminderEnabled, setReminderEnabled] = useState(true);
-  const [scanning, setScanning] = useState(false);
-  const [scanMessage, setScanMessage] = useState("");
-  const [scanError, setScanError] = useState("");
-  const [ocrText, setOcrText] = useState("");
-  const [suggestions, setSuggestions] = useState([]);
-  const [skippedScheduleLines, setSkippedScheduleLines] = useState([]);
-  const [previewUrl, setPreviewUrl] = useState("");
-  const [classroomSyncing, setClassroomSyncing] = useState(false);
-  const [classroomError, setClassroomError] = useState("");
-  const [classroomSyncMessage, setClassroomSyncMessage] = useState("");
-  useEffect(() => {
-    if (!googleClassroomClientId) return undefined;
-    let active = true;
-    prepareGoogleIdentityServices().catch((error) => {
-      if (active) {
-        setClassroomError(
-          error instanceof Error
-            ? error.message
-            : "Could not load Google sign-in.",
-        );
-      }
-    });
-    return () => {
-      active = false;
-    };
-  }, []);
   const classes = study.classes || [];
   const currentTime = `${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}`;
   const upcomingClasses = Array.from({ length: 7 }, (_, offset) => {
@@ -13529,77 +13520,54 @@ function ClassSchedulePage({
   const assignments = tasks
     .filter((task) => task.type === "assignment")
     .sort((a, b) => String(a.due || "").localeCompare(String(b.due || "")));
-  const classroomAssignmentCount = assignments.filter(
-    (task) => task.source === "google-classroom",
-  ).length;
-  const lastClassroomSync = study.classroomSync?.lastSyncedAt || "";
-  const formattedClassroomSync = Number.isNaN(Date.parse(lastClassroomSync))
-    ? ""
-    : new Date(lastClassroomSync).toLocaleString();
   const openAssignmentCount = assignments.filter((task) => !task.done).length;
   const remindersEnabled = classes.filter(
     (item) => item.reminderEnabled,
   ).length;
-  const scheduledClassMinutes = classes.flatMap((item) =>
-    [item.startTime, item.endTime]
-      .filter((time) => /^\d{2}:\d{2}$/.test(time || ""))
-      .map((time) => Number(time.slice(0, 2)) * 60 + Number(time.slice(3))),
-  );
-  const timetableStart = scheduledClassMinutes.length
-    ? Math.max(
-        0,
-        Math.floor(Math.min(...scheduledClassMinutes) / 60) * 60,
-      )
-    : 7 * 60;
-  const timetableEnd = scheduledClassMinutes.length
-    ? Math.min(
-        24 * 60,
-        Math.ceil(Math.max(...scheduledClassMinutes) / 60) * 60,
-      )
-    : 20 * 60;
+  const timetableRange = getClassTimetableRange(classes);
+  const timetableStart = timetableRange.start;
+  const timetableEnd = timetableRange.end;
+  const timetableHours = timetableRange.hours;
   const timetableSlotCount = Math.max(
     2,
     Math.ceil((timetableEnd - timetableStart) / 30),
   );
+  const mobileTimetableDate = new Date(currentWeekStart);
+  mobileTimetableDate.setDate(
+    currentWeekStart.getDate() + WEEKDAYS.indexOf(mobileTimetableDay),
+  );
+  const mobileDayClasses = classes.filter(
+    (item) =>
+      item.day === mobileTimetableDay &&
+      classOccursOnDate(item, dateKey(mobileTimetableDate)),
+  );
+  const mobileTimetableRange = getClassTimetableRange(mobileDayClasses, 60);
+  const mobileTimetableStart = mobileTimetableRange.start;
+  const mobileTimetableEnd = mobileTimetableRange.end;
+  const mobileTimetableHours = mobileTimetableRange.hours;
+  const mobileTimetableSlotCount = Math.max(
+    2,
+    Math.ceil((mobileTimetableEnd - mobileTimetableStart) / 30),
+  );
   const timetableRowStyle = {
     "--timetable-slot-count": timetableSlotCount,
+    "--mobile-timetable-slot-count": mobileTimetableSlotCount,
     gridTemplateRows: classes.length
       ? `44px repeat(${timetableSlotCount}, 38px)`
       : "44px 92px",
   };
-  const timetableSlots = Array.from(
-    { length: timetableSlotCount },
-    (_, index) => index,
-  );
-  const classOverlap =
-    endTime > startTime &&
-    classes.some((item) => {
-      if (item.day !== classDay) return false;
-      if (
-        classWeekPattern &&
-        item.weekPattern &&
-        item.weekPattern !== classWeekPattern
-      )
-        return false;
-      return item.startTime < endTime && item.endTime > startTime;
-    });
+  const overlappingDays =
+    endTime > startTime
+      ? WEEKDAYS.filter(
+          (day) =>
+            classDays.includes(day) &&
+            classes.some((item) => {
+              if (item.day !== day) return false;
+              return item.startTime < endTime && item.endTime > startTime;
+            }),
+        )
+      : [];
   const notificationSupported = "Notification" in window;
-  const applyScheduleParse = (text) => {
-    const result = parseScheduleTextWithReport(text);
-    setSuggestions(result.classes);
-    setSkippedScheduleLines(result.skipped);
-    if (result.skipped.length) {
-      const firstReason = result.skipped[0].reason;
-      setScanMessage(
-        `${result.importedLines} of ${result.totalLines} lines imported (${result.classes.length} classes). ` +
-          `${result.skipped.length} skipped; ${firstReason}`,
-      );
-    } else {
-      setScanMessage(
-        `All ${result.importedLines} lines imported (${result.classes.length} classes). Review and add each one.`,
-      );
-    }
-  };
   const exportCalendar = () => {
     if (!classes.length) {
       toast("Add a class before exporting your timetable.");
@@ -13637,181 +13605,77 @@ function ClassSchedulePage({
       );
     }
   };
-  const syncClassroomAssignments = async () => {
-    setClassroomSyncing(true);
-    setClassroomError("");
-    setClassroomSyncMessage("");
-    try {
-      const accessToken = await requestClassroomAccessToken(
-        googleClassroomClientId,
-      );
-      const importedAssignments =
-        await fetchClassroomAssignments(accessToken);
-      if (!onSyncClassroomAssignments(importedAssignments)) {
-        throw new Error("Daymark could not save the synced assignments.");
-      }
-      setClassroomSyncMessage(
-        importedAssignments.length
-          ? `Synced ${importedAssignments.length} assignment${importedAssignments.length === 1 ? "" : "s"}.`
-          : "Sync complete. No published assignments were found.",
-      );
-    } catch (error) {
-      console.error("Could not sync Google Classroom assignments.", error);
-      setClassroomError(
-        error instanceof Error
-          ? error.message
-          : "Could not sync Google Classroom. Try again.",
-      );
-    } finally {
-      setClassroomSyncing(false);
-    }
-  };
-
-  useEffect(
-    () => () => {
-      if (previewUrl) URL.revokeObjectURL(previewUrl);
-    },
-    [previewUrl],
-  );
-
-  const saveClass = async (item) => {
-    let enableReminder = item.reminderEnabled;
-    if (enableReminder) {
-      enableReminder = await onRequestReminders();
-      if (!enableReminder) {
-        toast("Class saved without a reminder");
-      }
-    }
-    const savedItem = { ...item, reminderEnabled: enableReminder };
-    onUpdate(
-      (current) => ({ classes: [...current.classes, savedItem] }),
-      "Class added to your timetable",
-      {
-        label: "Undo",
-        onClick: () =>
-          onUpdate(
-            (current) => ({
-              classes: current.classes.filter(
-                (entry) => entry.id !== savedItem.id,
-              ),
-            }),
-            "Class addition undone",
+  const toggleClassDay = (day) => {
+    setClassDays((selectedDays) =>
+      selectedDays.includes(day)
+        ? selectedDays.filter((selectedDay) => selectedDay !== day)
+        : WEEKDAYS.filter(
+            (weekDay) => selectedDays.includes(weekDay) || weekDay === day,
           ),
-      },
     );
   };
 
   const addClass = async (event) => {
     event.preventDefault();
-    if (!className.trim() || endTime <= startTime) return;
-    await saveClass({
+    if (!className.trim() || !classDays.length || endTime <= startTime) return;
+    const duplicateDays = findDuplicateClassDays(classes, {
+      name: className,
+      days: classDays,
+      startTime,
+      endTime,
+    });
+    const daysToAdd = classDays.filter((day) => !duplicateDays.includes(day));
+    if (!daysToAdd.length) {
+      toast("Already in your timetable");
+      return;
+    }
+    let enableReminder = reminderEnabled;
+    if (enableReminder) {
+      enableReminder = await onRequestReminders();
+      if (!enableReminder) {
+        toast("Classes saved without reminders");
+      }
+    }
+    const savedItems = daysToAdd.map((day) => ({
       id: createId(),
       name: className.trim(),
-      day: classDay,
+      day,
       startTime,
       endTime,
       location: location.trim(),
-      reminderEnabled,
-      weekPattern: classWeekPattern,
+      reminderEnabled: enableReminder,
       startDate: todayKey(),
-    });
-    setClassWeekPattern("");
-    setClassName("");
-    setLocation("");
-  };
-  const scanImage = async (event) => {
-    const file = event.target.files?.[0];
-    event.target.value = "";
-    if (!file) return;
-    if (!file.type.startsWith("image/")) {
-      setScanError("Choose an image file of your timetable.");
-      return;
-    }
-    if (file.size > 12 * 1024 * 1024) {
-      setScanError("Choose an image smaller than 12 MB.");
-      return;
-    }
-    if (previewUrl) URL.revokeObjectURL(previewUrl);
-    setPreviewUrl(URL.createObjectURL(file));
-    setScanning(true);
-    setScanError("");
-    setScanMessage("Loading on-device text recognition…");
-    setSuggestions([]);
-    setSkippedScheduleLines([]);
-    let worker;
-    try {
-      const { createWorker } = await import("tesseract.js");
-      worker = await createWorker("eng", undefined, {
-        logger: (progress) => {
-          if (progress.status === "recognizing text") {
-            setScanMessage(
-              `Reading timetable… ${Math.round(progress.progress * 100)}%`,
-            );
-          }
-        },
-      });
-      const result = await worker.recognize(file);
-      setOcrText(result.data.text.trim());
-      applyScheduleParse(result.data.text);
-    } catch (error) {
-      console.error("Could not read the timetable image.", error);
-      setScanError(
-        error instanceof Error
-          ? error.message
-          : "Could not read this timetable image.",
-      );
-      setScanMessage("");
-    } finally {
-      await worker?.terminate();
-      setScanning(false);
-    }
-  };
-
-  const parseOcr = () => {
-    applyScheduleParse(ocrText);
-  };
-
-  const addSuggestion = async (item) => {
-    await saveClass(item);
-    setSuggestions((items) =>
-      items.filter((suggestion) => suggestion.id !== item.id),
-    );
-  };
-  const importAllSuggestions = async () => {
-    const items = [...suggestions];
-    if (!items.length) return;
-    const reminderAllowed = items.some((item) => item.reminderEnabled)
-      ? await onRequestReminders()
-      : false;
-    const imported = items.map((item) => ({
-      ...item,
-      reminderEnabled: Boolean(item.reminderEnabled && reminderAllowed),
     }));
-    const importedIds = new Set(imported.map((item) => item.id));
-    const withoutReminders =
-      items.some((item) => item.reminderEnabled) && !reminderAllowed;
+    const savedIds = new Set(savedItems.map((item) => item.id));
+    const addedMessage =
+      savedItems.length === 1
+        ? "Class added"
+        : `Added ${savedItems.length} classes`;
+    const successMessage = duplicateDays.length
+      ? `${addedMessage} · Already in your timetable`
+      : addedMessage;
     onUpdate(
-      (current) => ({ classes: [...current.classes, ...imported] }),
-      withoutReminders
-        ? `${imported.length} classes imported without reminders.`
-        : `${imported.length} classes imported.`,
+      (current) => ({ classes: [...current.classes, ...savedItems] }),
+      successMessage,
       {
         label: "Undo",
         onClick: () =>
           onUpdate(
             (current) => ({
               classes: current.classes.filter(
-                (item) => !importedIds.has(item.id),
+                (entry) => !savedIds.has(entry.id),
               ),
             }),
-            "Class import undone",
+            savedItems.length === 1
+              ? "Class addition undone"
+              : "Class days addition undone",
           ),
       },
     );
-    setSuggestions([]);
-    setSkippedScheduleLines([]);
+    setClassDays([todayName]);
+    setClassName("");
+    setLocation("");
   };
-
   const toggleReminder = async (item) => {
     let enabled = !item.reminderEnabled;
     if (enabled) enabled = await onRequestReminders();
@@ -13884,6 +13748,105 @@ function ClassSchedulePage({
     : Notification.permission === "granted"
       ? "Browser reminders are enabled."
       : "Allow notifications to receive class reminders while Daymark is open.";
+  const renderTimetableClass = (item, placement = {}) => {
+    const accent = [
+      "#7c5cff",
+      "#ff8b5e",
+      "#38c995",
+      "#f3bd4b",
+      "#5a9cff",
+      "#ef6b9a",
+    ][
+      [...String(item.name)].reduce(
+        (hash, character) => hash + character.charCodeAt(0),
+        0,
+      ) % 6
+    ];
+    return (
+      <article
+        className="class-entry timetable-class-entry"
+        key={`${item.id}-${placement.key || "timeline"}`}
+        draggable
+        style={{
+          ...(placement.gridRow ? { gridRow: placement.gridRow } : {}),
+          ...(placement.gridColumn ? { gridColumn: placement.gridColumn } : {}),
+          "--class-accent": accent,
+        }}
+        onDragStart={(event) => {
+          draggedClassId.current = String(item.id);
+          event.dataTransfer.effectAllowed = "move";
+          event.dataTransfer.setData("text/plain", String(item.id));
+        }}
+        onDragEnd={() => {
+          draggedClassId.current = "";
+        }}
+      >
+        <div className="class-entry-time">
+          <time className="class-entry-start-time" dateTime={item.startTime}>
+            {formatTime(item.startTime)}
+          </time>
+          <span aria-hidden="true">–</span>
+          <time dateTime={item.endTime}>{formatTime(item.endTime)}</time>
+        </div>
+        <strong>
+          {item.name}
+          {item.weekPattern ? ` · Week ${item.weekPattern}` : ""}
+        </strong>
+        {item.location && <small>{item.location}</small>}
+        <details className="class-entry-manage">
+          <summary>Manage</summary>
+          <div className="class-entry-actions">
+            <label className="class-entry-move">
+              Day
+              <select
+                aria-label={`Move ${item.name} to day`}
+                value={item.day}
+                onChange={(event) =>
+                  moveClassToDay(item.id, event.target.value)
+                }
+              >
+                {WEEKDAYS.map((weekDay) => (
+                  <option key={weekDay}>{weekDay}</option>
+                ))}
+              </select>
+            </label>
+            <button
+              type="button"
+              className="text-button"
+              onClick={() => adjustClassTime(item, -15)}
+              aria-label={`Move ${item.name} 15 minutes earlier`}
+            >
+              −15m
+            </button>
+            <button
+              type="button"
+              className="text-button"
+              onClick={() => adjustClassTime(item, 15)}
+              aria-label={`Move ${item.name} 15 minutes later`}
+            >
+              +15m
+            </button>
+            <button
+              type="button"
+              className="text-button"
+              onClick={() => toggleReminder(item)}
+              aria-label={`${item.reminderEnabled ? "Disable" : "Enable"} reminder for ${item.name}`}
+            >
+              {item.reminderEnabled ? "Reminder on" : "Add reminder"}
+            </button>
+            <button
+              type="button"
+              className="text-button danger-text"
+              onClick={() => removeClass(item.id)}
+              aria-label={`Remove ${item.name}`}
+            >
+              Remove
+            </button>
+          </div>
+        </details>
+      </article>
+    );
+  };
 
   return (
     <section
@@ -13903,7 +13866,7 @@ function ClassSchedulePage({
         <PageHeading
           eyebrow="CLASSES"
           title="Class schedule"
-          subtitle="Add classes or import a timetable, then review the week."
+          subtitle="Add classes, then review the week."
           aside={
             <div className="class-page-actions">
               <button
@@ -13911,7 +13874,7 @@ function ClassSchedulePage({
                 className="primary-btn"
                 onClick={() => onNavigate("add-class")}
               >
-                <Icon name="Plus" size={16} /> Add / import classes
+                <Icon name="Plus" size={16} /> Add classes
               </button>
               <button
                 type="button"
@@ -13933,24 +13896,34 @@ function ClassSchedulePage({
                 <h3>Your weekly timetable</h3>
                 <span className="class-week-date-range">{weekDateRange}</span>
                 <span className="class-week-help">
-                  <span className="class-week-desktop-help">
-                    {permissionText} Drag a class to a different day, or adjust
-                    its time in 15-minute steps.
-                  </span>
-                  <span className="class-week-mobile-help">
-                    Tap a day to view your classes.
-                  </span>
+                  {classes.length ? (
+                    <>
+                      <span className="class-week-desktop-help">
+                        {permissionText} Drag a class to a different day, or
+                        adjust its time in 15-minute steps.
+                      </span>
+                      <span className="class-week-mobile-help">
+                        Tap a day to view your classes.
+                      </span>
+                    </>
+                  ) : (
+                    <span>Add classes to plan out your week.</span>
+                  )}
                 </span>
               </div>
-              <div className="class-week-summary">
-                <span className="class-count">
-                  {classes.length} class{classes.length === 1 ? "" : "es"}
-                </span>
-                <span className="class-reminder-count">
-                  {remindersEnabled} reminders
-                </span>
-              </div>
+              {classes.length > 0 && (
+                <div className="class-week-summary">
+                  <span className="class-count">
+                    {classes.length} class{classes.length === 1 ? "" : "es"}
+                  </span>
+                  <span className="class-reminder-count">
+                    {remindersEnabled} reminders
+                  </span>
+                </div>
+              )}
             </div>
+            {classes.length ? (
+              <>
             <nav className="mobile-class-day-picker" aria-label="Choose timetable day">
               {WEEKDAYS.map((day, dayIndex) => {
                 const dayDate = new Date(currentWeekStart);
@@ -13980,13 +13953,6 @@ function ClassSchedulePage({
                 {WEEKDAYS.map((day, dayIndex) => {
                   const dayDate = new Date(currentWeekStart);
                   dayDate.setDate(currentWeekStart.getDate() + dayIndex);
-                  const dayKey = dateKey(dayDate);
-                  const dayClasses = classes
-                    .filter(
-                      (item) =>
-                        item.day === day && classOccursOnDate(item, dayKey),
-                    )
-                    .sort((a, b) => a.startTime.localeCompare(b.startTime));
                   const isToday = day === todayName;
                   return (
                     <div
@@ -14002,13 +13968,13 @@ function ClassSchedulePage({
                           day: "numeric",
                         })}
                       </span>
-                      {isToday && <small>Today</small>}
+                      {isToday && <small>TODAY</small>}
                     </div>
                   );
                 })}
                 {classes.length > 0 && (
                   <div
-                    className="class-timetable-axis"
+                    className="class-timetable-axis class-timetable-axis-desktop"
                     style={{
                       gridColumn: 1,
                       gridRow: `2 / span ${timetableSlotCount}`,
@@ -14016,18 +13982,32 @@ function ClassSchedulePage({
                     }}
                     aria-hidden="true"
                   >
-                    {timetableSlots
-                      .filter((slot) => slot % 2 === 0)
-                      .map((slot) => {
-                        const time = timetableStart + slot * 30;
-                        return (
-                          <time key={slot} style={{ gridRow: slot + 1 }}>
-                            {formatTime(
-                              `${String(Math.floor(time / 60)).padStart(2, "0")}:${String(time % 60).padStart(2, "0")}`,
-                            )}
-                          </time>
-                        );
-                      })}
+                    {timetableHours.map((time, index) => (
+                        <time key={time} style={{ gridRow: index * 2 + 1 }}>
+                          {formatTime(
+                            `${String(Math.floor(time / 60)).padStart(2, "0")}:${String(time % 60).padStart(2, "0")}`,
+                          )}
+                        </time>
+                    ))}
+                  </div>
+                )}
+                {classes.length > 0 && (
+                  <div
+                    className="class-timetable-axis class-timetable-axis-mobile"
+                    style={{
+                      gridColumn: 1,
+                      gridRow: `2 / span ${mobileTimetableSlotCount}`,
+                      gridTemplateRows: `repeat(${mobileTimetableSlotCount}, 38px)`,
+                    }}
+                    aria-hidden="true"
+                  >
+                    {mobileTimetableHours.map((time, index) => (
+                        <time key={time} style={{ gridRow: index * 2 + 1 }}>
+                          {formatTime(
+                            `${String(Math.floor(time / 60)).padStart(2, "0")}:${String(time % 60).padStart(2, "0")}`,
+                          )}
+                        </time>
+                    ))}
                   </div>
                 )}
                 {classes.length > 0 && WEEKDAYS.map((day, dayIndex) => {
@@ -14041,6 +14021,18 @@ function ClassSchedulePage({
                     )
                     .sort((a, b) => a.startTime.localeCompare(b.startTime));
                   const isToday = day === todayName;
+                  const isMobileSelected = day === mobileTimetableDay;
+                  const dayGridStart = isMobileSelected
+                    ? mobileTimetableStart
+                    : timetableStart;
+                  const dayGridSlotCount = isMobileSelected
+                    ? mobileTimetableSlotCount
+                    : timetableSlotCount;
+                  const dayGroups = layoutClassTimetable(
+                    dayClasses,
+                    dayGridStart,
+                    dayGridSlotCount,
+                  );
                   return (
                     <div
                       className={`class-timetable-day${isToday ? " today" : ""}${mobileTimetableDay === day ? " mobile-day-selected" : ""}`}
@@ -14067,161 +14059,58 @@ function ClassSchedulePage({
                       }}
                     >
                       {dayClasses.length ? (
-                        dayClasses.map((item) => {
-                          const startMinute =
-                            Number(item.startTime.slice(0, 2)) * 60 +
-                            Number(item.startTime.slice(3));
-                          const endMinute =
-                            Number(item.endTime.slice(0, 2)) * 60 +
-                            Number(item.endTime.slice(3));
-                          const startSlot = Math.max(
-                            0,
-                            Math.floor((startMinute - timetableStart) / 30),
-                          );
-                          const endSlot = Math.min(
-                            timetableSlotCount,
-                            Math.max(
-                              startSlot + 1,
-                              Math.ceil((endMinute - timetableStart) / 30),
-                            ),
-                          );
+                        dayGroups.map((group) => {
+                          if (group.entries.length === 1) {
+                            const [entry] = group.entries;
+                            return renderTimetableClass(entry.item, {
+                              gridRow: `${group.startSlot + 1} / ${group.endSlot + 1}`,
+                            });
+                          }
                           return (
-                            <article
-                              className="class-entry timetable-class-entry"
-                              key={item.id}
-                              draggable
+                            <div
+                              className={`timetable-overlap-group ${group.laneCount > 3 ? "overlap-lanes-many" : `overlap-lanes-${group.laneCount}`}`}
+                              key={`overlap-${day}-${group.start}`}
                               style={{
-                                gridRow: `${startSlot + 1} / ${endSlot + 1}`,
-                                "--class-accent": [
-                                  "#7c5cff",
-                                  "#ff8b5e",
-                                  "#38c995",
-                                  "#f3bd4b",
-                                  "#5a9cff",
-                                  "#ef6b9a",
-                                ][
-                                  [...String(item.name)].reduce(
-                                    (hash, character) =>
-                                      hash + character.charCodeAt(0),
-                                    0,
-                                  ) % 6
-                                ],
-                              }}
-                              onDragStart={(event) => {
-                                draggedClassId.current = String(item.id);
-                                event.dataTransfer.effectAllowed = "move";
-                                event.dataTransfer.setData(
-                                  "text/plain",
-                                  String(item.id),
-                                );
-                              }}
-                              onDragEnd={() => {
-                                draggedClassId.current = "";
+                                gridRow: `${group.startSlot + 1} / ${group.endSlot + 1}`,
+                                "--overlap-lane-count": group.laneCount,
+                                "--overlap-slot-count": group.slotCount,
                               }}
                             >
-                              <div className="class-entry-time">
-                                {formatTime(item.startTime)} –{" "}
-                                {formatTime(item.endTime)}
+                              <div className="timetable-overlap-lanes">
+                                {group.entries.map((entry) =>
+                                  renderTimetableClass(entry.item, {
+                                    key: "lane",
+                                    gridRow: entry.gridRow,
+                                    gridColumn: entry.lane + 1,
+                                  }),
+                                )}
                               </div>
-                              <strong>
-                                {item.name}
-                                {item.weekPattern
-                                  ? ` · Week ${item.weekPattern}`
-                                  : ""}
-                              </strong>
-                              {item.location && <small>{item.location}</small>}
-                              <details className="class-entry-manage">
-                                <summary>Manage</summary>
-                                <div className="class-entry-actions">
-                                  <label className="class-entry-move">
-                                    Day
-                                    <select
-                                      aria-label={`Move ${item.name} to day`}
-                                      value={item.day}
-                                      onChange={(event) =>
-                                        moveClassToDay(
-                                          item.id,
-                                          event.target.value,
-                                        )
-                                      }
-                                    >
-                                      {WEEKDAYS.map((weekDay) => (
-                                        <option key={weekDay}>
-                                          {weekDay}
-                                        </option>
-                                      ))}
-                                    </select>
-                                  </label>
-                                  <button
-                                    type="button"
-                                    className="text-button"
-                                    onClick={() => adjustClassTime(item, -15)}
-                                    aria-label={`Move ${item.name} 15 minutes earlier`}
-                                  >
-                                    −15m
-                                  </button>
-                                  <button
-                                    type="button"
-                                    className="text-button"
-                                    onClick={() => adjustClassTime(item, 15)}
-                                    aria-label={`Move ${item.name} 15 minutes later`}
-                                  >
-                                    +15m
-                                  </button>
-                                  <button
-                                    type="button"
-                                    className="text-button"
-                                    onClick={() => toggleReminder(item)}
-                                    aria-label={`${item.reminderEnabled ? "Disable" : "Enable"} reminder for ${item.name}`}
-                                  >
-                                    {item.reminderEnabled
-                                      ? "Reminder on"
-                                      : "Add reminder"}
-                                  </button>
-                                  <button
-                                    type="button"
-                                    className="text-button danger-text"
-                                    onClick={() => removeClass(item.id)}
-                                    aria-label={`Remove ${item.name}`}
-                                  >
-                                    Remove
-                                  </button>
+                              <details className="timetable-overlap-summary">
+                                <summary>
+                                  <strong>{group.entries.length} classes</strong>
+                                  <span>Overlapping · tap to view</span>
+                                </summary>
+                                <div className="timetable-overlap-expanded">
+                                  {group.entries.map((entry) =>
+                                    renderTimetableClass(entry.item, {
+                                      key: "expanded",
+                                    }),
+                                  )}
                                 </div>
                               </details>
-                            </article>
+                            </div>
                           );
                         })
                       ) : null}
                     </div>
                   );
                 })}
-                {!classes.length && (
-                  <p
-                    className="class-timetable-empty class-timetable-no-classes"
-                    style={{
-                      gridColumn: "1 / -1",
-                      gridRow: 2,
-                    }}
-                  >
-                    <strong>Your week is clear</strong>
-                    <span>Add your classes to see them laid out by day and time.</span>
-                  </p>
-                )}
-                {classes.length > 0 &&
-                  !classes.some((item) => {
-                    const selectedIndex = WEEKDAYS.indexOf(mobileTimetableDay);
-                    const selectedDate = new Date(currentWeekStart);
-                    selectedDate.setDate(currentWeekStart.getDate() + selectedIndex);
-                    return (
-                      item.day === mobileTimetableDay &&
-                      classOccursOnDate(item, dateKey(selectedDate))
-                    );
-                  }) && (
+                {classes.length > 0 && !mobileDayClasses.length && (
                     <p
                       className="class-timetable-empty mobile-class-day-empty"
                       style={{
                         gridColumn: 2,
-                        gridRow: `2 / span ${timetableSlotCount}`,
+                        gridRow: `2 / span ${mobileTimetableSlotCount}`,
                       }}
                     >
                       No classes scheduled for this day.
@@ -14229,6 +14118,23 @@ function ClassSchedulePage({
                   )}
               </div>
             </div>
+              </>
+            ) : (
+              <div className="class-timetable-empty-state">
+                <span className="class-timetable-empty-icon" aria-hidden="true">
+                  <Icon name="CalendarDays" size={22} />
+                </span>
+                <strong>Your week is clear</strong>
+                <p>Your timetable is ready when you are.</p>
+                <button
+                  type="button"
+                  className="primary-btn"
+                  onClick={() => onNavigate("add-class")}
+                >
+                  <Icon name="Plus" size={16} /> Add your first class
+                </button>
+              </div>
+            )}
             {upcomingClasses.length > 0 && (
               <section
                 className="class-upcoming"
@@ -14247,16 +14153,19 @@ function ClassSchedulePage({
                       className={index === 0 ? "next" : ""}
                       key={`${item.id}-${item.date}`}
                     >
-                      <span className="class-upcoming-date">
-                        {item.dayLabel}
-                      </span>
+                      <div className="class-upcoming-meta">
+                        <span className="class-upcoming-date">
+                          {item.dayLabel}
+                        </span>
+                        <time dateTime={`${item.date}T${item.startTime}`}>
+                          {formatTime(item.startTime)} –{" "}
+                          {formatTime(item.endTime)}
+                        </time>
+                      </div>
                       <div className="class-upcoming-info">
                         <strong>{item.name}</strong>
                         <small>{item.location || item.day}</small>
                       </div>
-                      <time dateTime={`${item.date}T${item.startTime}`}>
-                        {formatTime(item.startTime)}
-                      </time>
                     </li>
                   ))}
                 </ol>
@@ -14264,10 +14173,8 @@ function ClassSchedulePage({
             )}
           </section>
 
-          <details
-            className="class-assignment-board"
-            open={assignments.length > 0 || !lastClassroomSync}
-          >
+          {assignments.length > 0 && (
+            <details className="class-assignment-board">
             <summary className="class-assignment-summary">
               Assignments &amp; deadlines
               <span className="class-assignment-count">
@@ -14277,227 +14184,49 @@ function ClassSchedulePage({
             <p className="class-assignment-intro">
               Deadlines also appear on your calendar.
             </p>
-            <div className="classroom-sync-row">
-              <span>
-                {formattedClassroomSync
-                  ? `Last synced ${formattedClassroomSync}`
-                  : classroomAssignmentCount
-                    ? `${classroomAssignmentCount} imported from Google Classroom`
-                    : "Import published coursework from your Google account."}
-              </span>
-              <button
-                type="button"
-                className="subtle-btn classroom-sync-button"
-                onClick={syncClassroomAssignments}
-                disabled={!googleClassroomClientId || classroomSyncing}
-                title={
-                  googleClassroomClientId
-                    ? ""
-                    : "Google Classroom OAuth client ID setup is required."
-                }
-              >
-                {classroomSyncing
-                  ? "Connecting…"
-                  : formattedClassroomSync
-                    ? "Sync now"
-                    : "Connect Google Classroom"}
-              </button>
-            </div>
-            {classroomError && (
-              <p className="classroom-sync-message error" role="alert">
-                {classroomError}
-              </p>
-            )}
-            {classroomSyncMessage && (
-              <p className="classroom-sync-message" role="status">
-                {classroomSyncMessage}
-              </p>
-            )}
-            {assignments.length ? (
-              <div className="class-assignment-list">
-                {assignments.map((task) => (
-                  <div
-                    className={`class-assignment${task.done ? " done" : ""}`}
-                    key={task.id}
-                  >
-                    <input
-                      type="checkbox"
-                      checked={Boolean(task.done)}
-                      onChange={() => onToggleTask?.(task.id)}
-                      aria-label={`${task.done ? "Reopen" : "Complete"} ${task.title}`}
-                    />
-                    <span>
-                      <strong>{task.title}</strong>
-                      <small>
-                        {task.subject || "Unassigned subject"} · Due{" "}
-                        {task.due || "no date"} · {task.priority || "medium"}{" "}
-                        priority
-                      </small>
-                    </span>
-                    {task.sourceUrl && (
-                      <a
-                        className="text-button class-assignment-link"
-                        href={task.sourceUrl}
-                        target="_blank"
-                        rel="noreferrer"
-                      >
-                        Open
-                      </a>
-                    )}
-                    {!task.done && task.due && task.due < todayKey() && (
-                      <b>Overdue</b>
-                    )}
-                  </div>
-                ))}
-              </div>
-            ) : (
-              <div className="class-assignment-empty">
-                <span className="class-assignment-empty-icon">
-                  <Icon name="ArrowUpRight" size={20} />
-                </span>
-                <p>
-                  <strong>
-                    {!googleClassroomClientId
-                      ? "Google Classroom needs setup"
-                      : formattedClassroomSync
-                        ? "No published assignments found"
-                        : "Google Classroom isn’t connected yet"}
-                  </strong>
+            <div className="class-assignment-list">
+              {assignments.map((task) => (
+                <div
+                  className={`class-assignment${task.done ? " done" : ""}`}
+                  key={task.id}
+                >
+                  <input
+                    type="checkbox"
+                    checked={Boolean(task.done)}
+                    onChange={() => onToggleTask?.(task.id)}
+                    aria-label={`${task.done ? "Reopen" : "Complete"} ${task.title}`}
+                  />
                   <span>
-                    {!googleClassroomClientId
-                      ? "Add a Google OAuth client ID and enable the Classroom API to connect."
-                      : "Connect your Google account to import published coursework and deadlines."}
+                    <strong>{task.title}</strong>
+                    <small>
+                      {task.subject || "Unassigned subject"} · Due{" "}
+                      {task.due || "no date"} · {task.priority || "medium"}{" "}
+                      priority
+                    </small>
                   </span>
-                </p>
-              </div>
-            )}
+                  {task.sourceUrl && (
+                    <a
+                      className="text-button class-assignment-link"
+                      href={task.sourceUrl}
+                      target="_blank"
+                      rel="noreferrer"
+                    >
+                      Open
+                    </a>
+                  )}
+                  {!task.done && task.due && task.due < todayKey() && (
+                    <b>Overdue</b>
+                  )}
+                </div>
+              ))}
+            </div>
           </details>
+          )}
         </div>
       )}
 
       {editorMode && (
         <div className="class-schedule-grid">
-          <section className="class-schedule-panel">
-            <div className="class-panel-heading">
-              <h3>Import a timetable photo</h3>
-              <span>On-device OCR · first scan downloads English data</span>
-            </div>
-            <label className={`class-image-picker${scanning ? " busy" : ""}`}>
-              <input
-                type="file"
-                accept="image/*"
-                onChange={scanImage}
-                disabled={scanning}
-              />
-              <strong>
-                {scanning ? (
-                  "Scanning timetable…"
-                ) : (
-                  <>
-                    <Icon name="Plus" size={16} /> Choose a timetable image
-                  </>
-                )}
-              </strong>
-              <span>JPG, PNG, or another common image · up to 12 MB</span>
-            </label>
-            {previewUrl && (
-              <img
-                className="class-schedule-preview"
-                src={previewUrl}
-                alt="Selected timetable preview"
-              />
-            )}
-            {scanMessage && (
-              <p className="class-scan-message" role="status">
-                {scanMessage}
-              </p>
-            )}
-            {scanError && (
-              <p className="file-import-error" role="alert">
-                {scanError}
-              </p>
-            )}
-            {skippedScheduleLines.length > 0 && (
-              <div className="class-import-skipped">
-                <strong>Skipped lines and reasons</strong>
-                <ul>
-                  {skippedScheduleLines.slice(0, 5).map((item) => (
-                    <li key={item.line}>
-                      Line {item.line} ({item.text}): {item.reason}
-                    </li>
-                  ))}
-                  {skippedScheduleLines.length > 5 && (
-                    <li>
-                      And {skippedScheduleLines.length - 5} more skipped lines.
-                    </li>
-                  )}
-                </ul>
-              </div>
-            )}
-            {ocrText && (
-              <div className="class-ocr-review">
-                <label htmlFor="timetable-ocr-text">
-                  Recognized text — correct it if needed
-                </label>
-                <textarea
-                  id="timetable-ocr-text"
-                  value={ocrText}
-                  onChange={(event) => setOcrText(event.target.value)}
-                  rows="6"
-                />
-                <button
-                  type="button"
-                  className="text-button"
-                  onClick={parseOcr}
-                >
-                  Find classes in text
-                </button>
-              </div>
-            )}
-            {suggestions.length > 0 && (
-              <div className="class-suggestions">
-                <div className="class-suggestions-header">
-                  <strong>Review detected classes</strong>
-                  <div>
-                    <button
-                      type="button"
-                      className="text-button"
-                      onClick={importAllSuggestions}
-                    >
-                      Import all
-                    </button>
-                    <button
-                      type="button"
-                      className="text-button"
-                      onClick={() => {
-                        setSuggestions([]);
-                        setSkippedScheduleLines([]);
-                        setScanMessage("Class import cancelled.");
-                      }}
-                    >
-                      Cancel
-                    </button>
-                  </div>
-                </div>
-                {suggestions.map((item) => (
-                  <div className="class-suggestion" key={item.id}>
-                    <span>
-                      {item.day} · {formatTime(item.startTime)}–
-                      {formatTime(item.endTime)} · {item.name}
-                    </span>
-                    <button
-                      type="button"
-                      className="text-button"
-                      onClick={() => addSuggestion(item)}
-                    >
-                      Add
-                    </button>
-                  </div>
-                ))}
-              </div>
-            )}
-          </section>
-
           <section className="class-schedule-panel">
             <div className="class-panel-heading">
               <h3>Add a class</h3>
@@ -14513,28 +14242,27 @@ function ClassSchedulePage({
                   required
                 />
               </label>
-              <label>
-                Day
-                <select
-                  value={classDay}
-                  onChange={(event) => setClassDay(event.target.value)}
-                >
+              <fieldset className="class-day-picker">
+                <legend>Day</legend>
+                <div>
                   {WEEKDAYS.map((day) => (
-                    <option key={day}>{day}</option>
+                    <button
+                      type="button"
+                      className={classDays.includes(day) ? "selected" : ""}
+                      key={day}
+                      aria-label={day}
+                      aria-pressed={classDays.includes(day)}
+                      title={day}
+                      onClick={() => toggleClassDay(day)}
+                    >
+                      {day.slice(0, 3)}
+                    </button>
                   ))}
-                </select>
-              </label>
-              <label>
-                Repeats
-                <select
-                  value={classWeekPattern}
-                  onChange={(event) => setClassWeekPattern(event.target.value)}
-                >
-                  <option value="">Every week</option>
-                  <option value="A">Alternating weeks · A</option>
-                  <option value="B">Alternating weeks · B</option>
-                </select>
-              </label>
+                </div>
+                <span className="class-day-hint">
+                  Select every day this class meets.
+                </span>
+              </fieldset>
               <div className="class-time-fields">
                 <label>
                   Starts
@@ -14576,18 +14304,23 @@ function ClassSchedulePage({
                 />
                 Remind me 10 minutes before class
               </label>
-              {classOverlap && (
+              {overlappingDays.length > 0 && (
                 <p className="class-overlap-warning" role="status">
-                  This time overlaps another class on {classDay}. Check the
+                  This time overlaps another class on{" "}
+                  {overlappingDays.join(", ")}. Check the
                   timetable before adding it.
                 </p>
               )}
               <button
                 type="submit"
                 className="primary-btn"
-                disabled={!className.trim() || endTime <= startTime}
+                disabled={
+                  !className.trim() || !classDays.length || endTime <= startTime
+                }
               >
-                Add to timetable
+                {classDays.length > 1
+                  ? `Add to ${classDays.length} days`
+                  : "Add to timetable"}
               </button>
             </form>
           </section>
@@ -14653,7 +14386,12 @@ export default function App() {
   const [editing, setEditing] = useState(null);
   const [selectedDay, setSelectedDay] = useState(endKey);
   const [darkMode, setDarkMode] = useState(
-    () => localStorage.getItem("daymark-dark") === "true",
+    () => {
+      const savedTheme = localStorage.getItem("daymark-dark");
+      return savedTheme === null
+        ? window.matchMedia("(prefers-color-scheme: dark)").matches
+        : savedTheme === "true";
+    },
   );
   const [search, setSearch] = useState("");
   const [commandOpen, setCommandOpen] = useState(false);
@@ -15797,25 +15535,6 @@ export default function App() {
   };
   const addTask = (task) =>
     save({ ...data, tasks: [...data.tasks, task] }, "Task added");
-  const saveClassroomAssignments = (classroomAssignments) => {
-    const current = dataRef.current;
-    return save(
-      {
-        ...current,
-        tasks: mergeClassroomAssignments(current.tasks, classroomAssignments),
-        study: {
-          ...current.study,
-          classroomSync: {
-            lastSyncedAt: new Date().toISOString(),
-            assignmentCount: classroomAssignments.length,
-          },
-        },
-      },
-      classroomAssignments.length
-        ? `Synced ${classroomAssignments.length} Google Classroom assignment${classroomAssignments.length === 1 ? "" : "s"}`
-        : "Google Classroom sync complete",
-    );
-  };
   const logWater = (dayKey) => {
     const current = dataRef.current;
     const existing = current.wellness.history?.[dayKey] || {};
@@ -17309,7 +17028,6 @@ export default function App() {
               tasks={data.tasks}
               onToggleTask={toggleTask}
               onUpdate={updateStudy}
-              onSyncClassroomAssignments={saveClassroomAssignments}
               onRequestReminders={requestReminderPermission}
               toast={toast}
               editorMode={section === "add-class"}

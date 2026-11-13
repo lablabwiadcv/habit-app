@@ -12,14 +12,17 @@ import {
   createClassCalendarExport,
   createClassCalendarExportWithReport,
   deduplicateFlashcards,
+  findDuplicateClassDays,
   dailyStreak,
   fillPausedScheduleDays,
+  getClassTimetableRange,
+  getHabitScheduleDays,
+  getMissedHabitDates,
   isValidBackup,
   isHabitPausedOnDate,
   isWithinQuietHours,
   estimateOneRepMax,
-  getHabitScheduleDays,
-  getMissedHabitDates,
+  layoutClassTimetable,
   normalizeQuizAnswer,
   parseFlashcardCsv,
   parseFlashcardCsvWithReport,
@@ -196,6 +199,19 @@ test("class schedules propagate meridiem across compact ranges", () => {
   );
 });
 
+test("class schedules recover common OCR punctuation and zero confusions in times", () => {
+  const [dotted] = parseScheduleText("Mon 9.00-10.00 Mathematics");
+  assert.deepEqual(
+    { start: dotted.startTime, end: dotted.endTime, name: dotted.name },
+    { start: "09:00", end: "10:00", name: "Mathematics" },
+  );
+  const [misread] = parseScheduleText("Wed 1:OO-2:OO History");
+  assert.deepEqual(
+    { start: misread.startTime, end: misread.endTime, name: misread.name },
+    { start: "13:00", end: "14:00", name: "History" },
+  );
+});
+
 test("class schedules infer an afternoon end time when an AM/PM range crosses noon", () => {
   const [item] = parseScheduleText("Mon 11:00 - 1:00 Chem");
   assert.deepEqual(
@@ -218,6 +234,85 @@ test("class schedules accept multiple weekdays and one-time entries", () => {
       { day: "Monday", name: "English", startTime: "09:00", endTime: "10:00" },
       { day: "Wednesday", name: "English", startTime: "09:00", endTime: "10:00" },
       { day: "Wednesday", name: "Lunch", startTime: "09:00", endTime: "10:00" },
+    ],
+  );
+});
+
+test("class schedules detect duplicate name, day, and time without matching unrelated entries", () => {
+  const classes = [
+    { name: "Biology", day: "Monday", startTime: "09:00", endTime: "10:00" },
+    { name: "History", day: "Wednesday", startTime: "09:00", endTime: "10:00" },
+  ];
+  assert.deepEqual(
+    findDuplicateClassDays(classes, {
+      name: " biology ",
+      days: ["Monday", "Wednesday", "Friday"],
+      startTime: "09:00",
+      endTime: "10:00",
+    }),
+    ["Monday"],
+  );
+  assert.deepEqual(
+    findDuplicateClassDays(classes, {
+      name: "Biology",
+      days: ["Monday"],
+      startTime: "09:30",
+      endTime: "10:30",
+    }),
+    [],
+  );
+});
+
+test("class timetable labels each hour and pads a mobile day by one hour", () => {
+  assert.deepEqual(
+    getClassTimetableRange([{ startTime: "06:00", endTime: "07:30" }], 60),
+    {
+      start: 5 * 60,
+      end: 9 * 60,
+      hours: [5 * 60, 6 * 60, 7 * 60, 8 * 60],
+    },
+  );
+});
+
+test("class timetable groups overlaps into minimum-width lanes and keeps separate times separate", () => {
+  const groups = layoutClassTimetable(
+    [
+      { id: "a", startTime: "09:00", endTime: "11:00" },
+      { id: "b", startTime: "09:00", endTime: "10:00" },
+      { id: "c", startTime: "10:00", endTime: "12:00" },
+      { id: "d", startTime: "12:00", endTime: "13:00" },
+    ],
+    8 * 60,
+    10,
+  );
+  assert.deepEqual(
+    groups.map(({ laneCount, startSlot, endSlot, entries }) => ({
+      laneCount,
+      startSlot,
+      endSlot,
+      entries: entries.map(({ item, lane, gridRow }) => ({
+        id: item.id,
+        lane,
+        gridRow,
+      })),
+    })),
+    [
+      {
+        laneCount: 2,
+        startSlot: 2,
+        endSlot: 8,
+        entries: [
+          { id: "a", lane: 0, gridRow: "1 / 5" },
+          { id: "b", lane: 1, gridRow: "1 / 3" },
+          { id: "c", lane: 1, gridRow: "3 / 7" },
+        ],
+      },
+      {
+        laneCount: 1,
+        startSlot: 8,
+        endSlot: 10,
+        entries: [{ id: "d", lane: 0, gridRow: "1 / 3" }],
+      },
     ],
   );
 });

@@ -154,7 +154,8 @@ async function generateCards({ id, text, count = 10 }) {
     self.postMessage({
       id,
       type: "warning",
-      message: "AI cards need localhost or HTTPS. Open the app at localhost or an https address.",
+      message:
+        "This HTTP connection cannot cache the AI model. On a phone, use HTTPS if available; keep this page open while the model downloads.",
     });
   }
   const chunks = splitIntoChunks(text);
@@ -253,7 +254,7 @@ self.onmessage = ({ data }) => {
         id: data.id,
         type: "error",
         message: failedToLoadModel
-          ? "AI cards need localhost or HTTPS. Open the app at localhost or an https address."
+          ? "Could not load the AI model. Check your internet connection. On a phone using a local-network HTTP address, try an HTTPS address so the model can be cached."
           : message,
       });
     });

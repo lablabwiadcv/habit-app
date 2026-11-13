@@ -29,6 +29,112 @@ export function classOccursOnDate(item, key) {
   return parity === (item.weekPattern === "B" ? 1 : 0);
 }
 
+export function findDuplicateClassDays(classes, { name, days, startTime, endTime }) {
+  const normalizedName = String(name || "").trim().toLowerCase();
+  return days.filter((day) =>
+    classes.some(
+      (item) =>
+        String(item.name || "").trim().toLowerCase() === normalizedName &&
+        item.day === day &&
+        item.startTime === startTime &&
+        item.endTime === endTime,
+    ),
+  );
+}
+
+export function getClassTimetableRange(classes, padding = 0) {
+  const minutes = classes
+    .filter(
+      (item) =>
+        /^\d{2}:\d{2}$/.test(item.startTime || "") &&
+        /^\d{2}:\d{2}$/.test(item.endTime || ""),
+    )
+    .flatMap((item) => [
+      Number(item.startTime.slice(0, 2)) * 60 + Number(item.startTime.slice(3)),
+      Number(item.endTime.slice(0, 2)) * 60 + Number(item.endTime.slice(3)),
+    ]);
+  if (!minutes.length) {
+    return { start: 7 * 60, end: 8 * 60, hours: [] };
+  }
+  const start = Math.max(
+    0,
+    Math.floor((Math.min(...minutes) - padding) / 60) * 60,
+  );
+  const end = Math.min(
+    24 * 60,
+    Math.ceil((Math.max(...minutes) + padding) / 60) * 60,
+  );
+  const hours = Array.from(
+    { length: Math.ceil((end - start) / 60) },
+    (_, index) => start + index * 60,
+  );
+  return { start, end, hours };
+}
+
+export function layoutClassTimetable(dayClasses, gridStart, slotCount) {
+  const groups = [];
+  [...dayClasses]
+    .filter(
+      (item) =>
+        /^\d{2}:\d{2}$/.test(item.startTime || "") &&
+        /^\d{2}:\d{2}$/.test(item.endTime || ""),
+    )
+    .sort((a, b) => a.startTime.localeCompare(b.startTime))
+    .forEach((item) => {
+      const start =
+        Number(item.startTime.slice(0, 2)) * 60 +
+        Number(item.startTime.slice(3));
+      const end =
+        Number(item.endTime.slice(0, 2)) * 60 +
+        Number(item.endTime.slice(3));
+      let group = groups.at(-1);
+      if (!group || start >= group.end) {
+        group = { start, end, laneEnds: [], entries: [] };
+        groups.push(group);
+      }
+      let lane = group.laneEnds.findIndex((laneEnd) => laneEnd <= start);
+      if (lane === -1) lane = group.laneEnds.length;
+      group.laneEnds[lane] = end;
+      group.end = Math.max(group.end, end);
+      group.entries.push({ item, lane, start, end });
+    });
+
+  return groups.map((group) => {
+    const startSlot = Math.max(
+      0,
+      Math.floor((group.start - gridStart) / 30),
+    );
+    const endSlot = Math.min(
+      slotCount,
+      Math.max(startSlot + 1, Math.ceil((group.end - gridStart) / 30)),
+    );
+    return {
+      ...group,
+      startSlot,
+      endSlot,
+      slotCount: endSlot - startSlot,
+      laneCount: group.laneEnds.length,
+      entries: group.entries.map((entry) => {
+        const entryStartSlot = Math.max(
+          startSlot,
+          Math.floor((entry.start - gridStart) / 30),
+        );
+        const entryEndSlot = Math.min(
+          endSlot,
+          Math.max(
+            entryStartSlot + 1,
+            Math.ceil((entry.end - gridStart) / 30),
+          ),
+        );
+        return {
+          ...entry,
+          gridRow: `${entryStartSlot - startSlot + 1} / ${entryEndSlot - startSlot + 1}`,
+        };
+      }),
+    };
+  });
+}
+
 export const createId = () => `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
 
 export const STUDY_SET_LEVELS = ["Beginner", "Intermediate", "Advanced"];
@@ -540,7 +646,10 @@ export function createClassCalendarExport(classes) {
 }
 
 function parseClassTime(value, inheritedMeridiem = "") {
-  const match = value.match(/^(\d{1,2})(?::(\d{2}))?\s*(a\.?m\.?|p\.?m\.?)?$/i);
+  const normalizedValue = value
+    .replace(/[Oo]/g, "0")
+    .replace(/^(\d{1,2})\.(\d{2})$/, "$1:$2");
+  const match = normalizedValue.match(/^(\d{1,2})(?::(\d{2}))?\s*(a\.?m\.?|p\.?m\.?)?$/i);
   if (!match) return null;
   let hour = Number(match[1]);
   const minute = Number(match[2] || 0);
@@ -574,8 +683,15 @@ export function parseScheduleTextWithReport(text) {
   const classes = [];
   let importedLines = 0;
   const dayPattern = /\b(mon(?:day)?|tue(?:sday)?|tues(?:day)?|wed(?:nesday)?|thu(?:rsday)?|thurs(?:day)?|fri(?:day)?|sat(?:urday)?|sun(?:day)?)\b/gi;
-  const rangePattern = /\b(\d{1,2}(?::[0-5]\d)?)(?:\s*(a\.?m\.?|p\.?m\.?))?\s*(?:-|–|—|to)\s*(\d{1,2}(?::[0-5]\d)?)(?:\s*(a\.?m\.?|p\.?m\.?))?\b/i;
-  const singleTimePattern = /\b(\d{1,2}(?::[0-5]\d)?)(?:\s*(a\.?m\.?|p\.?m\.?))?\b/i;
+  const ocrTime = "\\d{1,2}(?:[:.][0-5Oo]\\d|[:.][Oo]{2})?";
+  const rangePattern = new RegExp(
+    `\\b(${ocrTime})(?:\\s*(a\\.?m\\.?|p\\.?m\\.?))?\\s*(?:-|–|—|to)\\s*(${ocrTime})(?:\\s*(a\\.?m\\.?|p\\.?m\\.?))?\\b`,
+    "i",
+  );
+  const singleTimePattern = new RegExp(
+    `\\b(${ocrTime})(?:\\s*(a\\.?m\\.?|p\\.?m\\.?))?\\b`,
+    "i",
+  );
 
   lines.forEach((line, index) => {
     if (!line.trim()) return;
