@@ -120,7 +120,41 @@ const icons = {
   User,
 };
 
+const emojiIcons = {
+  "emoji-panda": "🐼",
+  "emoji-fox": "🦊",
+  "emoji-bear": "🐻",
+  "emoji-frog": "🐸",
+  "emoji-unicorn": "🦄",
+  "emoji-butterfly": "🦋",
+  "emoji-bee": "🐝",
+  "emoji-turtle": "🐢",
+  "emoji-penguin": "🐧",
+  "emoji-octopus": "🐙",
+  "emoji-dinosaur": "🦖",
+  "emoji-rainbow": "🌈",
+  "emoji-heart": "💖",
+  "emoji-mushroom": "🍄",
+  "emoji-strawberry": "🍓",
+  "emoji-pizza": "🍕",
+  "emoji-bubble-tea": "🧋",
+  "emoji-cactus": "🌵",
+};
+
 export default function Icon({ name, size = 20, className = "" }) {
+  const emoji = typeof name === "string" ? emojiIcons[name] : null;
+  if (emoji) {
+    return (
+      <span
+        aria-hidden="true"
+        className={`icon-emoji ${className}`}
+        style={{ fontSize: size }}
+      >
+        {emoji}
+      </span>
+    );
+  }
+
   const iconName = String(name || "CircleDashed").split(/[-_\s]/).map((part) =>
     part.charAt(0).toUpperCase() + part.slice(1),
   ).join("");

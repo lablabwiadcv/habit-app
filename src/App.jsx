@@ -97,6 +97,24 @@ const PROFILE_ICONS = [
   ["cloud", "Cloud"],
   ["mountain", "Mountain"],
   ["rocket", "Rocket"],
+  ["emoji-panda", "Panda"],
+  ["emoji-fox", "Fox"],
+  ["emoji-bear", "Bear"],
+  ["emoji-frog", "Frog"],
+  ["emoji-unicorn", "Unicorn"],
+  ["emoji-butterfly", "Butterfly"],
+  ["emoji-bee", "Bee"],
+  ["emoji-turtle", "Turtle"],
+  ["emoji-penguin", "Penguin"],
+  ["emoji-octopus", "Octopus"],
+  ["emoji-dinosaur", "Dinosaur"],
+  ["emoji-rainbow", "Rainbow"],
+  ["emoji-heart", "Sparkling heart"],
+  ["emoji-mushroom", "Mushroom"],
+  ["emoji-strawberry", "Strawberry"],
+  ["emoji-pizza", "Pizza"],
+  ["emoji-bubble-tea", "Bubble tea"],
+  ["emoji-cactus", "Cactus"],
 ];
 const HABIT_ICONS = [
   "dumbbell",
@@ -11560,97 +11578,9 @@ function TodayCommandCenter({
     }))
     .filter((item) => item.daysAhead > 0)
     .sort((a, b) => a.daysAhead - b.daysAhead)[0]?.day;
-  const pendingDayTask = tasks
-    .filter((task) => !task.done && task.due && task.due <= today)
-    .sort((a, b) => a.due.localeCompare(b.due))[0];
-  const nextStudyBlock = dayStudyBlocks.find((block) => !block.done);
-  const minutesUntilNextClass = visibleClasses.length
-    ? Number(visibleClasses[0].startTime.slice(0, 2)) * 60 +
-      Number(visibleClasses[0].startTime.slice(3, 5)) -
-      nowMinutes
-    : Number.POSITIVE_INFINITY;
-  const classIsImminent =
-    minutesUntilNextClass <= 15 &&
-    (!pendingDayTask || pendingDayTask.due >= today);
   const workoutCompleted = (workout.history || []).some(
     (session) => session.finished === today,
   );
-  const nextStep = classIsImminent
-    ? {
-        eyebrow: "COMING UP",
-        title: visibleClasses[0].name,
-        detail: `Your next class starts at ${visibleClasses[0].startTime}${visibleClasses[0].location ? ` · ${visibleClasses[0].location}` : ""}.`,
-        action: "View schedule",
-        run: () => onNavigate("class-schedule"),
-      }
-    : unfinishedHabits.length
-      ? {
-          eyebrow: "NEXT HABIT",
-          title: `Check in: ${unfinishedHabits[0].name}`,
-          detail: `${unfinishedHabits.length} scheduled habit${unfinishedHabits.length === 1 ? "" : "s"} left for ${today === todayKey() ? "today" : todayName}.`,
-          action: "Mark complete",
-          run: () => onToggleHabit(unfinishedHabits[0].id, today),
-        }
-      : pendingDayTask
-        ? {
-            eyebrow: "TASK DUE",
-            title: pendingDayTask.title,
-            detail:
-              pendingDayTask.due < today
-                ? "This task is overdue."
-                : "Due today.",
-            action: "View task list",
-            run: () =>
-              document.getElementById("task-list")?.scrollIntoView({
-                behavior: window.matchMedia("(prefers-reduced-motion: reduce)")
-                  .matches
-                  ? "auto"
-                  : "smooth",
-                block: "start",
-              }),
-          }
-        : visibleClasses.length
-          ? {
-              eyebrow: "COMING UP",
-              title: visibleClasses[0].name,
-              detail: `Your next class starts at ${visibleClasses[0].startTime}${visibleClasses[0].location ? ` · ${visibleClasses[0].location}` : ""}.`,
-              action: "View schedule",
-              run: () => onNavigate("class-schedule"),
-            }
-          : nextStudyBlock
-            ? {
-                eyebrow: "NEXT STUDY BLOCK",
-                title:
-                  nextStudyBlock.topic ||
-                  nextStudyBlock.subject ||
-                  "Study block",
-                detail: `${nextStudyBlock.minutes || 60} minutes planned${nextStudyBlock.time ? ` at ${nextStudyBlock.time}` : ""}.`,
-                action: "Open study",
-                run: () => onNavigate("study"),
-              }
-            : dayWorkoutPlanned && !workoutCompleted
-              ? {
-                  eyebrow: "WORKOUT",
-                  title: "Workout planned for today.",
-                  detail: "Open your workout plan to review it.",
-                  action: "Open workout",
-                  run: () => onNavigate("workout"),
-                }
-              : !journal.text && !journal.gratitude
-                ? {
-                    eyebrow: "JOURNAL",
-                    title: "Write a journal entry.",
-                    detail: "Record a note from today.",
-                    action: "Write an entry",
-                    run: onJournal,
-                  }
-                : {
-                    eyebrow: "ALL CAUGHT UP",
-                    title: "No next steps to show.",
-                    detail: "Review your progress in Insights.",
-                    action: "View insights",
-                    run: () => onNavigate("insights"),
-                  };
   const addQuickTask = (event) => {
     event.preventDefault();
     const title = quickTaskTitle.trim();
@@ -11876,29 +11806,6 @@ function TodayCommandCenter({
           </button>
         </article>
       </div>
-      {nextStep.eyebrow !== "JOURNAL" && (
-        <section
-          className="dashboard-next-step"
-          aria-labelledby="dashboard-next-step-title"
-        >
-          <span className="dashboard-next-step-icon">
-            <Icon name="Sparkles" size={20} />
-          </span>
-          <div className="dashboard-next-step-copy">
-            <p className="eyebrow">{nextStep.eyebrow}</p>
-            <h3 id="dashboard-next-step-title">{nextStep.title}</h3>
-            <p>{nextStep.detail}</p>
-          </div>
-          <button
-            type="button"
-            className="dashboard-next-step-action"
-            onClick={nextStep.run}
-          >
-            {nextStep.action}
-            <Icon name="ArrowRight" size={16} />
-          </button>
-        </section>
-      )}
       <div
         className="dashboard-quick-actions"
         aria-labelledby="quick-actions-title"
@@ -17640,15 +17547,18 @@ export default function App() {
               </span>
               <span>
                 <strong>Profile preview</strong>
-                <small>Your selected icon</small>
+                <small>
+                  {PROFILE_ICONS.find(([icon]) => icon === profileIcon)?.[1] ||
+                    "Your selected icon"}
+                </small>
               </span>
             </div>
             <div
               className="profile-icon-picker"
               role="group"
-              aria-label="Choose profile icon"
+              aria-label="Choose profile icon or emoji"
             >
-              <span>Choose your profile icon</span>
+              <span>Choose an icon or emoji · scroll for more</span>
               <div>
                 {PROFILE_ICONS.map(([icon, label]) => (
                   <button
@@ -17660,7 +17570,10 @@ export default function App() {
                     aria-pressed={profileIcon === icon}
                     title={label}
                   >
-                    <Icon name={icon} size={20} />
+                    <Icon
+                      name={icon}
+                      size={icon.startsWith("emoji-") ? 22 : 20}
+                    />
                   </button>
                 ))}
               </div>
@@ -17888,9 +17801,9 @@ export default function App() {
             <div
               className="profile-icon-picker onboarding-icon-picker"
               role="group"
-              aria-label="Choose your profile icon"
+              aria-label="Choose your profile icon or emoji"
             >
-              <span>Choose your profile icon</span>
+              <span>Choose an icon or emoji · scroll for more</span>
               <div>
                 {PROFILE_ICONS.map(([icon, label]) => (
                   <button
@@ -17902,7 +17815,10 @@ export default function App() {
                     aria-pressed={onboardingIcon === icon}
                     title={label}
                   >
-                    <Icon name={icon} size={20} />
+                    <Icon
+                      name={icon}
+                      size={icon.startsWith("emoji-") ? 22 : 20}
+                    />
                   </button>
                 ))}
               </div>

@@ -5,11 +5,11 @@ const primaryItems = [
   ["today", "home", "Today"],
   ["habits", "check", "Habits"],
   ["calendar", "calendar", "Calendar"],
-  ["study", "clock", "Study"],
+  ["class-schedule", "book", "Classes"],
 ];
 
 const moreItems = [
-  ["class-schedule", "calendar", "Classes"],
+  ["study", "clock", "Study"],
   ["workout", "activity", "Workout"],
   ["learning", "book", "Learning"],
   ["journal", "note", "Journal"],
@@ -58,16 +58,15 @@ export default function MobileNav({
   const wasMoreOpen = useRef(false);
   const activeMoreItem = moreItems.some(([id]) =>
     section === id ||
-    (section === "add-class" && id === "class-schedule") ||
     (section === "flashcard-library" && id === "flashcards"),
   );
-  const activeMoreLabel = section === "add-class"
-    ? "Classes"
-    : section === "flashcard-library"
-      ? "Flashcards"
+  const activeMoreLabel = section === "flashcard-library"
+    ? "Flashcards"
     : moreItems.find(([id]) => section === id)?.[2];
   const activePrimaryIndex = primaryItems.findIndex(([id]) =>
-    section === id || (section === "add-habit" && id === "habits"),
+    section === id ||
+    (section === "add-habit" && id === "habits") ||
+    (section === "add-class" && id === "class-schedule"),
   );
   const activeTabIndex = activeMoreItem || moreOpen ? 4 : Math.max(0, activePrimaryIndex);
   const navigate = (id) => {
@@ -132,8 +131,8 @@ export default function MobileNav({
           {moreItems.map(([id, icon, label], index) => (
             <button
               type="button"
-              className={section === id || (section === "add-class" && id === "class-schedule") || (section === "flashcard-library" && id === "flashcards") ? "active" : ""}
-              aria-current={section === id || (section === "add-class" && id === "class-schedule") || (section === "flashcard-library" && id === "flashcards") ? "page" : undefined}
+              className={section === id || (section === "flashcard-library" && id === "flashcards") ? "active" : ""}
+              aria-current={section === id || (section === "flashcard-library" && id === "flashcards") ? "page" : undefined}
               key={id}
               onClick={() => navigate(id)}
               ref={section === id || (section === "flashcard-library" && id === "flashcards") || (!activeMoreItem && index === 0) ? activeMenuItemRef : undefined}
@@ -184,8 +183,20 @@ export default function MobileNav({
         {primaryItems.map(([id, icon, label]) => (
           <button
             type="button"
-            className={section === id || (section === "add-habit" && id === "habits") ? "active" : ""}
-            aria-current={section === id || (section === "add-habit" && id === "habits") ? "page" : undefined}
+            className={
+              section === id ||
+              (section === "add-habit" && id === "habits") ||
+              (section === "add-class" && id === "class-schedule")
+                ? "active"
+                : ""
+            }
+            aria-current={
+              section === id ||
+              (section === "add-habit" && id === "habits") ||
+              (section === "add-class" && id === "class-schedule")
+                ? "page"
+                : undefined
+            }
             key={id}
             onClick={() => navigate(id)}
           >
