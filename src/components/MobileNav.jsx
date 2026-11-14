@@ -49,6 +49,7 @@ export default function MobileNav({
   onAccount,
   accountLabel = "Sync across devices",
   accountStatus = "",
+  cloudEnabled = true,
 }) {
   const [moreOpen, setMoreOpen] = useState(false);
   const [showBackToTop, setShowBackToTop] = useState(false);
@@ -159,11 +160,13 @@ export default function MobileNav({
               <button type="button" onClick={() => runMenuAction(onImport)}><Icon name="ArrowUp" size={16} /> Import</button>
               <button type="button" className="reset-data" onClick={() => runMenuAction(onReset)}>Reset data</button>
             </div>
-            <button type="button" className="mobile-more-sync" onClick={() => runMenuAction(onAccount)}>
-              <Icon name="Cloud" size={16} />
-              <span>{accountLabel}</span>
-              {accountStatus && <small>{accountStatus}</small>}
-            </button>
+            {cloudEnabled && (
+              <button type="button" className="mobile-more-sync" onClick={() => runMenuAction(onAccount)}>
+                <Icon name="Cloud" size={16} />
+                <span>{accountLabel}</span>
+                {accountStatus && <small>{accountStatus}</small>}
+              </button>
+            )}
             <button type="button" className="mobile-more-profile" onClick={() => runMenuAction(onEditProfile)}>
               <span className="avatar"><Icon name={profile?.icon || "user"} size={20} /></span>
               <span>

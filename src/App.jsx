@@ -14264,6 +14264,7 @@ function ClassSchedulePage({
 export default function App() {
   const now = useToday();
   const isPhoneViewport = usePhoneViewport();
+  const cloudSyncEnabled = isFirebaseConfigured;
   const endKey = dateKey(now);
   const [dashboardDay, setDashboardDay] = useState(endKey);
   const dashboardDate = dateFromKey(dashboardDay);
@@ -16122,25 +16123,27 @@ export default function App() {
                   onChange={importData}
                 />
               </div>
-              <button
-                type="button"
-                className="profile-menu-edit account-sync-button"
-                onClick={() => setAccountDialogOpen(true)}
-              >
-                <Icon name="Cloud" size={16} />
-                {firebaseUser ? "Cloud sync" : "Sync across devices"}
-                {firebaseUser && (
-                  <small>
-                    {cloudSyncStatus === "synced"
-                      ? "Synced"
-                      : cloudSyncStatus === "saving"
-                        ? "Syncing…"
-                        : cloudSyncStatus === "error"
-                          ? "Needs attention"
-                          : "Connecting…"}
-                  </small>
-                )}
-              </button>
+              {cloudSyncEnabled && (
+                <button
+                  type="button"
+                  className="profile-menu-edit account-sync-button"
+                  onClick={() => setAccountDialogOpen(true)}
+                >
+                  <Icon name="Cloud" size={16} />
+                  {firebaseUser ? "Cloud sync" : "Sync across devices"}
+                  {firebaseUser && (
+                    <small>
+                      {cloudSyncStatus === "synced"
+                        ? "Synced"
+                        : cloudSyncStatus === "saving"
+                          ? "Syncing…"
+                          : cloudSyncStatus === "error"
+                            ? "Needs attention"
+                            : "Connecting…"}
+                    </small>
+                  )}
+                </button>
+              )}
               <button
                 type="button"
                 className="profile-menu-edit"
@@ -16174,6 +16177,7 @@ export default function App() {
           setProfileEditing(true);
         }}
         onAccount={() => setAccountDialogOpen(true)}
+        cloudEnabled={cloudSyncEnabled}
         accountLabel={firebaseUser ? "Cloud sync" : "Sync across devices"}
         accountStatus={
           firebaseUser

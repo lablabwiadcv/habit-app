@@ -16,7 +16,7 @@ export default function AccountSyncDialog({
   const [requestError, setRequestError] = useState("");
   const [busy, setBusy] = useState(false);
 
-  if (!open) return null;
+  if (!open || (!configured && !user)) return null;
 
   const runAuth = async (operationName, ...args) => {
     setBusy(true);
