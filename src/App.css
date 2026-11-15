@@ -85,8 +85,8 @@
   --space-3: 12px;
   --space-4: 16px;
   --space-5: 24px;
-  --sidebar-width: 200px;
-  --sidebar-item-height: 36px;
+  --sidebar-width: 212px;
+  --sidebar-item-height: 40px;
   --control-height-desktop: 36px;
   --control-height-mobile: 40px;
   --radius-control: 8px;
@@ -25109,22 +25109,22 @@ body {
 
   .sidebar .nav-item {
     min-height: var(--sidebar-item-height);
-    gap: 8px;
+    gap: 9px;
     padding: 4px 8px;
     border-radius: 8px;
-    font-size: 12px;
+    font-size: 13px;
   }
 
   .sidebar .nav-item > span:first-child {
     flex-basis: 24px;
     width: 24px;
-    height: 24px;
+    height: 26px;
     background: transparent;
   }
 
   .sidebar .nav-item > span:first-child svg {
-    width: 16px;
-    height: 16px;
+    width: 18px;
+    height: 18px;
   }
 
   .sidebar .sidebar-bottom {
