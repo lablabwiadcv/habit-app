@@ -6,6 +6,7 @@ import {
   onAuthStateChanged,
   signInWithEmailAndPassword,
   signInWithPopup,
+  signInWithRedirect,
   signOut,
 } from "firebase/auth";
 import {
@@ -30,9 +31,15 @@ export function observeAuth(onUser, onError) {
   return onAuthStateChanged(auth, onUser, onError);
 }
 
-export function signInWithGoogle() {
+export async function signInWithGoogle() {
   if (!auth) throw new Error("Firebase is not configured.");
-  return signInWithPopup(auth, new GoogleAuthProvider());
+  const provider = new GoogleAuthProvider();
+  try {
+    return await signInWithPopup(auth, provider);
+  } catch (error) {
+    if (error.code !== "auth/popup-blocked") throw error;
+    return signInWithRedirect(auth, provider);
+  }
 }
 
 export function signInWithEmail(email, password) {
