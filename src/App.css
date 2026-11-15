@@ -25229,7 +25229,8 @@ body {
   .content {
     width: calc(100% - var(--sidebar-width));
     margin-left: var(--sidebar-width);
-    padding: 24px 16px;
+    max-width: none;
+    padding: 24px 8px;
   }
 }
 
