@@ -14945,6 +14945,11 @@ body {
   color: var(--accent-text);
 }
 
+.xp-history-empty > div {
+  flex: 1;
+  min-width: 150px;
+}
+
 .xp-history-empty strong {
   color: var(--text);
   font-size: 12px;
@@ -14955,6 +14960,32 @@ body {
   color: var(--text-muted);
   font-size: 11px;
   line-height: 1.45;
+}
+
+.xp-history-action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  min-height: 36px;
+  padding: 8px 11px;
+  border: 1px solid var(--purple-border);
+  border-radius: 10px;
+  background: var(--purple-soft);
+  color: var(--accent-text);
+  font-size: 11px;
+  font-weight: 700;
+  white-space: nowrap;
+  transition:
+    background-color 150ms ease,
+    color 150ms ease,
+    transform 150ms ease;
+}
+
+.xp-history-action:hover {
+  transform: translateY(-1px);
+  background: var(--accent-strong);
+  color: var(--on-accent);
 }
 
 .xp-negative {
@@ -15019,6 +15050,10 @@ body {
 
   .xp-details-subheading {
     margin-top: 18px;
+  }
+
+  .xp-history-empty > .xp-history-action {
+    margin-left: 46px;
   }
 }
 

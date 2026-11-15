@@ -16259,6 +16259,7 @@ export default function App() {
                 aria-valuemin={0}
                 aria-valuemax={100}
                 aria-valuenow={levelProgress}
+                aria-valuetext={`${levelProgress}% complete, ${xpToNextLevel} XP remaining`}
               >
                 <i style={{ width: `${levelProgress}%` }} />
               </div>
@@ -16318,6 +16319,17 @@ export default function App() {
                   <strong>Your XP story starts here</strong>
                   <p>Complete a habit or learning milestone to see it here.</p>
                 </div>
+                <button
+                  type="button"
+                  className="xp-history-action"
+                  onClick={() => {
+                    setXpDetailsOpen(false);
+                    nav("habits");
+                  }}
+                >
+                  Explore habits
+                  <Icon name="ArrowRight" size={15} />
+                </button>
               </div>
             )}
             <h3 className="xp-details-subheading">Rewards</h3>
