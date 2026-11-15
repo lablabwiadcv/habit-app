@@ -27386,7 +27386,7 @@ body::before {
 }
 
 :root:not(.high-contrast) #root .content :is(
-  .section,
+  .section:not(.command-center),
   .feature-card,
   .calendar-view,
   .wellness-card,
@@ -27399,7 +27399,6 @@ body::before {
   .class-schedule-page,
   .workout-dashboard,
   .dashboard-overview,
-  .command-center,
   .upcoming-deadlines,
   .today-score-card,
   .weekly-review-card,
