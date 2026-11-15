@@ -16218,12 +16218,17 @@ export default function App() {
             aria-labelledby="xp-details-title"
             onClick={(event) => event.stopPropagation()}
           >
-            <div className="section-heading">
-              <div>
-                <p className="eyebrow">YOUR PROGRESS</p>
-                <h2 id="xp-details-title">
-                  Level {currentLevel} · {data.xp} XP
-                </h2>
+            <div className="section-heading xp-details-heading">
+              <div className="xp-details-title">
+                <span className="xp-details-level-icon" aria-hidden="true">
+                  <Icon name="Sparkles" size={20} />
+                </span>
+                <div>
+                  <p className="eyebrow">YOUR PROGRESS</p>
+                  <h2 id="xp-details-title">
+                    Level {currentLevel} · {data.xp} XP
+                  </h2>
+                </div>
               </div>
               <button
                 type="button"
@@ -16237,30 +16242,56 @@ export default function App() {
             </div>
             <div className="xp-details-progress">
               <div className="xp-details-progress-label">
-                <strong>
-                  {xpToNextLevel} XP to Level {currentLevel + 1}
-                </strong>
-                <span>{levelProgress}%</span>
+                <div className="xp-details-progress-copy">
+                  <strong>
+                    {xpToNextLevel} XP to Level {currentLevel + 1}
+                  </strong>
+                  <small>Keep going to unlock your next level</small>
+                </div>
+                <span className="xp-details-progress-percent">
+                  {levelProgress}%
+                </span>
               </div>
-              <div className="mini-progress">
+              <div
+                className="mini-progress"
+                role="progressbar"
+                aria-label={`Progress to Level ${currentLevel + 1}`}
+                aria-valuemin={0}
+                aria-valuemax={100}
+                aria-valuenow={levelProgress}
+              >
                 <i style={{ width: `${levelProgress}%` }} />
               </div>
             </div>
             <div className="xp-details-grid">
-              <div>
+              <div className="xp-details-stat">
+                <span className="xp-details-stat-icon" aria-hidden="true">
+                  <Icon name="Check" size={15} />
+                </span>
                 <strong>+5 XP</strong>
-                <small>Complete a habit</small>
+                <small>Per completed habit</small>
               </div>
-              <div>
+              <div className="xp-details-stat">
+                <span className="xp-details-stat-icon" aria-hidden="true">
+                  <Icon name="BookOpen" size={15} />
+                </span>
                 <strong>+25 XP</strong>
-                <small>Reach a learning milestone</small>
+                <small>Per learning milestone</small>
               </div>
-              <div>
+              <div className="xp-details-stat">
+                <span className="xp-details-stat-icon" aria-hidden="true">
+                  <Icon name="Star" size={15} />
+                </span>
                 <strong>100 XP</strong>
-                <small>Each level</small>
+                <small>For each level</small>
               </div>
             </div>
-            <h3 className="xp-details-subheading">Recent XP activity</h3>
+            <h3 className="xp-details-subheading">
+              <span>Recent XP activity</span>
+              <small>
+                {recentXpHistory.length ? "Latest rewards" : "Your history"}
+              </small>
+            </h3>
             {recentXpHistory.length ? (
               <div className="xp-history-list">
                 {recentXpHistory.map((entry) => (
@@ -16279,9 +16310,15 @@ export default function App() {
                 ))}
               </div>
             ) : (
-              <p className="muted">
-                Complete a habit or learning milestone to start your XP history.
-              </p>
+              <div className="xp-history-empty">
+                <span aria-hidden="true">
+                  <Icon name="Sparkles" size={18} />
+                </span>
+                <div>
+                  <strong>Your XP story starts here</strong>
+                  <p>Complete a habit or learning milestone to see it here.</p>
+                </div>
+              </div>
             )}
             <h3 className="xp-details-subheading">Rewards</h3>
             <div className="xp-rewards">
